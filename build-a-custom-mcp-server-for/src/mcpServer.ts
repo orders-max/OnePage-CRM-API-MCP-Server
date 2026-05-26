@@ -93,7 +93,11 @@ export function createMcpServer(config: AppConfig): McpServer {
         fromDate: dateSchema.optional().describe("Only tasks due on or after this date."),
         toDate: dateSchema.optional().describe("Only tasks due on or before this date."),
         page: pageSchema.describe("Page number. Starts at 1."),
-        perPage: perPageSchema.describe("Number of tasks to return. Maximum 100.")
+        perPage: perPageSchema.describe("Number of tasks to return. Maximum 100."),
+        fetchAll: z
+          .boolean()
+          .optional()
+          .describe("Set true to fetch every page of matching tasks in one tool call. Auto-enabled when fromDate or toDate is present.")
       }
     },
     async (input) => {
@@ -101,6 +105,7 @@ export function createMcpServer(config: AppConfig): McpServer {
         if (input.contactId && input.companyId) {
           throw new Error("Use either contactId or companyId, not both.");
         }
+        const fetchAll = input.fetchAll ?? (!!input.fromDate || !!input.toDate);
         const response = await client.listActions({
           contactId: input.contactId,
           companyId: input.companyId,
@@ -110,7 +115,8 @@ export function createMcpServer(config: AppConfig): McpServer {
           fromDate: input.fromDate,
           toDate: input.toDate,
           page: input.page ?? 1,
-          perPage: input.perPage ?? 20
+          perPage: input.perPage ?? (fetchAll ? 100 : 20),
+          fetchAll: input.fetchAll ?? (!!input.fromDate || !!input.toDate)
         });
         return successResult(describeActions(response), response);
       } catch (error) {

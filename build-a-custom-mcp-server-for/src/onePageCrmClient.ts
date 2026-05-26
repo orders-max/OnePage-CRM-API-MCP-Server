@@ -73,8 +73,102 @@ export class OnePageCrmClient {
     toDate?: string;
     page?: number;
     perPage?: number;
+    fetchAll?: boolean;
   }): Promise<unknown> {
-    const query: Record<string, QueryValue> = {
+    if (params.fetchAll) {
+      return this.listAllActions(params);
+    }
+
+    return this.request("GET", "/actions", { query: this.buildActionsQuery(params) });
+  }
+
+  private async listAllActions(params: {
+    contactId?: string;
+    companyId?: string;
+    assigneeId?: string;
+    status?: string;
+    includeDone?: boolean;
+    fromDate?: string;
+    toDate?: string;
+    page?: number;
+    perPage?: number;
+  }): Promise<unknown> {
+    const perPage = params.perPage ?? 100;
+    const firstPage = params.page ?? 1;
+    let page = firstPage;
+    let lastResponse: unknown;
+    let lastData: Record<string, unknown> | undefined;
+    let totalCount: number | undefined;
+    let maxPage: number | undefined;
+    const actions: unknown[] = [];
+
+    for (let requestCount = 0; requestCount < 1000; requestCount += 1) {
+      const response = await this.request("GET", "/actions", {
+        query: this.buildActionsQuery({ ...params, page, perPage })
+      });
+      const data = isRecord(response) && isRecord(response.data) ? response.data : undefined;
+      const pageActions = Array.isArray(data?.actions) ? data.actions : [];
+
+      lastResponse = response;
+      lastData = data;
+      actions.push(...pageActions);
+      totalCount = numberOrUndefined(data?.total_count) ?? totalCount;
+      maxPage = numberOrUndefined(data?.max_page) ?? maxPage;
+
+      if (maxPage !== undefined && page >= maxPage) {
+        break;
+      }
+      if (totalCount !== undefined && actions.length >= totalCount) {
+        break;
+      }
+      if (pageActions.length === 0) {
+        break;
+      }
+      if (maxPage === undefined && totalCount === undefined && pageActions.length < perPage) {
+        break;
+      }
+      page += 1;
+    }
+
+    const filtered = actions.filter((item: unknown) => {
+      if (!isRecord(item)) return true;
+      const action = (isRecord((item as Record<string, unknown>).action)
+        ? (item as Record<string, unknown>).action
+        : item) as Record<string, unknown>;
+      const date = stringOrUndefined(action.date);
+      if (!date) return true;
+      if (params.fromDate && date < params.fromDate) return false;
+      if (params.toDate && date > params.toDate) return false;
+      return true;
+    });
+
+    const mergedResponse = isRecord(lastResponse)
+      ? {
+          ...lastResponse,
+          data: {
+            ...(lastData ?? {}),
+            actions: filtered,
+            total_count: filtered.length,
+            page: firstPage,
+            per_page: perPage,
+            max_page: maxPage ?? page
+          }
+        }
+      : lastResponse;
+
+    return mergedResponse;
+  }
+
+  private buildActionsQuery(params: {
+    contactId?: string;
+    companyId?: string;
+    assigneeId?: string;
+    status?: string;
+    includeDone?: boolean;
+    page?: number;
+    perPage?: number;
+  }): Record<string, QueryValue> {
+    return {
       contact_id: params.contactId,
       company_id: params.companyId,
       assignee_id: params.assigneeId,
@@ -83,14 +177,6 @@ export class OnePageCrmClient {
       page: params.page,
       per_page: params.perPage
     };
-
-    if (params.fromDate || params.toDate) {
-      query.date_filter = "date";
-      query.since = params.fromDate;
-      query.until = params.toDate;
-    }
-
-    return this.request("GET", "/actions", { query });
   }
 
   async createAction(params: {
@@ -265,4 +351,12 @@ function friendlyStatusMessage(status: number): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
